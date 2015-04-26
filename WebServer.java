@@ -8,48 +8,59 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.impl.Json;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Verticle;
+import io.vertx.ext.mongo.MongoService;
+import io.vertx.ext.mongo.UpdateOptions;
+import io.vertx.core.AsyncResult;
 
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Random;
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 public class WebServer extends AbstractVerticle {
 
-  private final String DATE_FORMAT_STRING = "EEE, dd MMM yyyyy HH:mm:ss z";
-  private final String PATH_PLAINTEXT = "/plaintext";
-  private final String PATH_JSON = "/json";
-  private final String PATH_DB = "/db";
-  private final String PATH_QUERIES = "/queries";
-  private final String RESPONSE_TYPE_PLAIN = "text/plain";
-  private final String RESPONSE_TYPE_JSON = "application/json";
-  private final String HEADER_CONTENT_TYPE = "Content-Type";
-  private final String HEADER_CONTENT_LENGTH = "Content-Length";
-  private final String HEADER_SERVER = "Server";
-  private final String HEADER_SERVER_VERTX = "vert.x";
-  private final String HEADER_DATE = "Date";
-  private final String MONGO_ADDRESS = "hello.persistor";
-  private final String UNDERSCORE_ID = "_id";
-  private final String TEXT_ID = "id";
-  private final String TEXT_RESULT = "result";
-  private final String TEXT_QUERIES = "queries";
-  private final String TEXT_MESSAGE = "message";
-  private final String HELLO_WORLD = "Hello, world!";
-  private final String TEXT_ACTION = "action";
-  private final String TEXT_FINDONE = "findone";
-  private final String TEXT_COLLECTION = "collection";
-  private final String TEXT_WORLD = "World";
-  private final String TEXT_MATCHER = "matcher";
+  private static final String DATE_FORMAT_STRING = "EEE, dd MMM yyyyy HH:mm:ss z";
+  private static final String PATH_PLAINTEXT = "/plaintext";
+  private static final String PATH_JSON = "/json";
+  private static final String PATH_DB = "/db";
+  private static final String PATH_QUERIES = "/queries";
+  private static final String RESPONSE_TYPE_PLAIN = "text/plain";
+  private static final String RESPONSE_TYPE_JSON = "application/json";
+  private static final String HEADER_CONTENT_TYPE = "Content-Type";
+  private static final String HEADER_CONTENT_LENGTH = "Content-Length";
+  private static final String HEADER_SERVER = "Server";
+  private static final String HEADER_SERVER_VERTX = "vert.x";
+  private static final String HEADER_DATE = "Date";
+  private static final String UNDERSCORE_ID = "_id";
+  private static final String TEXT_ID = "id";
+  private static final String TEXT_RESULT = "result";
+  private static final String TEXT_QUERIES = "queries";
+  private static final String TEXT_MESSAGE = "message";
+  private static final String HELLO_WORLD = "Hello, world!";
+  private static final String TEXT_WORLD = "World";
+  private static final String MONGODB_CONFIG
+            = "{"
+            + "    \"address\": \"hello_persistor\","
+            + "    \"host\": \"127.0.0.1\","
+            + "    \"port\": 27017,"
+            + "    \"db_name\": \"hello_world\","
+            + "    \"pool_size\": 20,"
+            + "    \"useObjectId\" : true"
+            + "}";  
 
   private final Buffer helloWorldBuffer = Buffer.buffer(HELLO_WORLD);
   private final String helloWorldContentLength = String.valueOf(helloWorldBuffer.length());
   private final DateFormat DATE_FORMAT = new SimpleDateFormat(DATE_FORMAT_STRING);
   private String dateString;
+  private MongoService mongoService;
 
   @Override
   public void start() {
+    mongoService = MongoService.create(vertx, new JsonObject(MONGODB_CONFIG));
+    mongoService.start();
     vertx.createHttpServer().requestHandler(req -> {
     switch (req.path()) {
       case PATH_PLAINTEXT:
@@ -96,29 +107,20 @@ public class WebServer extends AbstractVerticle {
   }
 
   private void handleDbMongo(final HttpServerRequest req) {
-    vertx.eventBus().send(
-        MONGO_ADDRESS,
-        new JsonObject()
-            .put(TEXT_ACTION, TEXT_FINDONE)
-            .put(TEXT_COLLECTION, TEXT_WORLD)
-            .put(TEXT_MATCHER, new JsonObject().put(UNDERSCORE_ID, (ThreadLocalRandom.current().nextInt(10000) + 1))),
-        res -> {
-          JsonObject world = getResultFromReply(res.result());
-          String result = world.encode();
-          sendResponse(req, result);
+    JsonObject query = new JsonObject().put(TEXT_ID, (ThreadLocalRandom.current().nextInt(10000) + 1));
+    mongoService.find(TEXT_WORLD, query, res -> {
+      if (res.succeeded() && res.result().size() > 0) {
+        sendResponse(req, getResultFromReply(res.result().get(0)).encode());
+      } else {
+        res.cause().printStackTrace();
+      }
     });
   }
   
-  private JsonObject getResultFromReply(final Message reply) {
-    JsonObject body = (JsonObject)reply.body();
-    JsonObject world = body.getJsonObject(TEXT_RESULT);
-    Object id = world.remove(UNDERSCORE_ID);
-    if (id instanceof Double) {
-      world.put(TEXT_ID, Integer.valueOf(((Double)id).intValue()));
-    } else {
-      world.put(TEXT_ID, id);
-    }
-    return world;
+  private JsonObject getResultFromReply(final JsonObject json) {
+    Object id = json.remove(UNDERSCORE_ID);
+    json.put(TEXT_ID, Integer.valueOf(((Double)id).intValue()));
+    return json;
   }
 
   private void handleQueriesMongo(final HttpServerRequest req) {
@@ -135,19 +137,16 @@ public class WebServer extends AbstractVerticle {
     }
     final JsonArray worlds = new JsonArray();
     for (int i = 0; i < queriesParam; i++) {
-      vertx.eventBus().send(
-          MONGO_ADDRESS,
-          new JsonObject()
-              .put(TEXT_ACTION, TEXT_FINDONE)
-              .put(TEXT_COLLECTION, TEXT_WORLD)
-              .put(TEXT_MATCHER, new JsonObject().put(UNDERSCORE_ID, (ThreadLocalRandom.current().nextInt(10000) + 1))),
-          res -> {
-            JsonObject world = getResultFromReply(res.result());
-            worlds.add(world);
+      JsonObject query = new JsonObject().put(TEXT_ID, (ThreadLocalRandom.current().nextInt(10000) + 1));
+      mongoService.find(TEXT_WORLD, query, res -> {
+        if (res.succeeded() && res.result().size() > 0) {
+          worlds.add(getResultFromReply(res.result().get(0)));
+        } else {
+          res.cause().printStackTrace();
+        }
       });
-    }
-    String result = worlds.encode();
-    sendResponse(req, result);
+    } 
+    sendResponse(req, worlds.encode());
   }
 
   private void sendResponse(final HttpServerRequest req, final String result) {
