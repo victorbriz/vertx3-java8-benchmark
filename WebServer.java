@@ -27,6 +27,7 @@ public class WebServer extends AbstractVerticle {
   private static final String PATH_JSON = "/json";
   private static final String PATH_DB = "/db";
   private static final String PATH_QUERIES = "/queries";
+  private static final String PATH_UPDATES = "/updates";
   private static final String RESPONSE_TYPE_PLAIN = "text/plain";
   private static final String RESPONSE_TYPE_JSON = "application/json";
   private static final String HEADER_CONTENT_TYPE = "Content-Type";
@@ -36,11 +37,13 @@ public class WebServer extends AbstractVerticle {
   private static final String HEADER_DATE = "Date";
   private static final String UNDERSCORE_ID = "_id";
   private static final String TEXT_ID = "id";
+  private static final String RANDOM_NUMBER = "randomNumber";
   private static final String TEXT_RESULT = "result";
   private static final String TEXT_QUERIES = "queries";
   private static final String TEXT_MESSAGE = "message";
   private static final String HELLO_WORLD = "Hello, world!";
   private static final String TEXT_WORLD = "World";
+  private static final String TEXT_$SET = "$set";
   private static final String MONGODB_CONFIG
             = "{"
             + "    \"address\": \"hello_persistor\","
@@ -54,6 +57,7 @@ public class WebServer extends AbstractVerticle {
   private final Buffer helloWorldBuffer = Buffer.buffer(HELLO_WORLD);
   private final String helloWorldContentLength = String.valueOf(helloWorldBuffer.length());
   private final DateFormat DATE_FORMAT = new SimpleDateFormat(DATE_FORMAT_STRING);
+  private final Random random = ThreadLocalRandom.current();
   private String dateString;
   private MongoService mongoService;
 
@@ -73,7 +77,10 @@ public class WebServer extends AbstractVerticle {
         handleDbMongo(req);
         break;
       case PATH_QUERIES:
-        handleQueriesMongo(req);
+        handleDBMongo(req,false);
+        break;
+      case PATH_UPDATES:
+        handleDBMongo(req,true);
         break;
       default:
         req.response().setStatusCode(404);
@@ -107,7 +114,7 @@ public class WebServer extends AbstractVerticle {
   }
 
   private void handleDbMongo(final HttpServerRequest req) {
-    JsonObject query = new JsonObject().put(TEXT_ID, (ThreadLocalRandom.current().nextInt(10000) + 1));
+    JsonObject query = new JsonObject().put(TEXT_ID, (random.nextInt(10000) + 1));
     mongoService.find(TEXT_WORLD, query, res -> {
       if (res.succeeded() && res.result().size() > 0) {
         sendResponse(req, getResultFromReply(res.result().get(0)).encode());
@@ -123,7 +130,7 @@ public class WebServer extends AbstractVerticle {
     return json;
   }
 
-  private void handleQueriesMongo(final HttpServerRequest req) {
+  private void handleDBMongo(final HttpServerRequest req, final boolean randomUpdates) {
     int queriesParam = 1;
     try {
       queriesParam = Integer.parseInt(req.params().get(TEXT_QUERIES));
@@ -137,16 +144,31 @@ public class WebServer extends AbstractVerticle {
     }
     final JsonArray worlds = new JsonArray();
     for (int i = 0; i < queriesParam; i++) {
-      JsonObject query = new JsonObject().put(TEXT_ID, (ThreadLocalRandom.current().nextInt(10000) + 1));
+      JsonObject query = new JsonObject().put(TEXT_ID, (random.nextInt(10000) + 1));
       mongoService.find(TEXT_WORLD, query, res -> {
         if (res.succeeded() && res.result().size() > 0) {
-          worlds.add(getResultFromReply(res.result().get(0)));
+          JsonObject world = getResultFromReply(res.result().get(0));
+          if (randomUpdates) {
+            world.put(RANDOM_NUMBER, (random.nextInt(10000) + 1));
+            updateRandom(world);
+          }
+          worlds.add(world);
         } else {
           res.cause().printStackTrace();
         }
       });
     } 
     sendResponse(req, worlds.encode());
+  }
+
+  private void updateRandom(JsonObject json) {
+    JsonObject query = new JsonObject().put(UNDERSCORE_ID, json.getString(TEXT_ID));
+    JsonObject update = new JsonObject().put(TEXT_$SET, json);
+    mongoService.update(TEXT_WORLD, query, update, res -> {
+      if (!res.succeeded()) {
+        res.cause().printStackTrace();
+      }
+    });
   }
 
   private void sendResponse(final HttpServerRequest req, final String result) {
