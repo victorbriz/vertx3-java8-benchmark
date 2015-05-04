@@ -20,30 +20,57 @@ import java.util.Random;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
+import freemarker.template.Template;
+import freemarker.template.Configuration;
+import java.io.StringReader;
+import java.io.Writer;
+import java.io.StringWriter;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.ArrayList;
+
 public class WebServer extends AbstractVerticle {
 
-  private static final String DATE_FORMAT_STRING = "EEE, dd MMM yyyyy HH:mm:ss z";
   private static final String PATH_PLAINTEXT = "/plaintext";
   private static final String PATH_JSON = "/json";
   private static final String PATH_DB = "/db";
   private static final String PATH_QUERIES = "/queries";
   private static final String PATH_UPDATES = "/updates";
+  private static final String PATH_FORTUNES = "/fortunes";
   private static final String RESPONSE_TYPE_PLAIN = "text/plain";
+  private static final String RESPONSE_TYPE_HTML = "text/html";
   private static final String RESPONSE_TYPE_JSON = "application/json";
   private static final String HEADER_CONTENT_TYPE = "Content-Type";
   private static final String HEADER_CONTENT_LENGTH = "Content-Length";
   private static final String HEADER_SERVER = "Server";
   private static final String HEADER_SERVER_VERTX = "vert.x";
   private static final String HEADER_DATE = "Date";
+  private static final String MONGO_ADDRESS = "hello.persistor";
+  private static final String FREEMARKER_ADDRESS = "vertx.freemarker";
   private static final String UNDERSCORE_ID = "_id";
   private static final String TEXT_ID = "id";
   private static final String RANDOM_NUMBER = "randomNumber";
   private static final String TEXT_RESULT = "result";
+  private static final String TEXT_RESULTS = "results";
   private static final String TEXT_QUERIES = "queries";
   private static final String TEXT_MESSAGE = "message";
+  private static final String TEXT_MESSAGES = "messages";
+  private static final String ADD_FORTUNE_MESSAGE = "Additional fortune added at request time.";
   private static final String HELLO_WORLD = "Hello, world!";
+  private static final String TEXT_ACTION = "action";
+  private static final String TEXT_CRITERIA = "criteria";
+  private static final String TEXT_UPDATE = "update";
+  private static final String TEXT_OBJ_NEW = "objNew";
+  private static final String TEXT_FINDONE = "findone";
+  private static final String TEXT_FIND = "find";
+  private static final String TEXT_COLLECTION = "collection";
   private static final String TEXT_WORLD = "World";
+  private static final String TEXT_FORTUNE = "Fortune";
+  private static final String TEXT_MATCHER = "matcher";
+  private static final String TEMPLATE_FORTUNE = "<!DOCTYPE html><html><head><title>Fortunes</title></head><body><table><tr><th>id</th><th>message</th></tr><#list messages as message><tr><td>${message.id?html}</td><td>${message.message?html}</td></tr></#list></table></body></html>";
   private static final String TEXT_$SET = "$set";
+  private static final String DATE_FORMAT_STRING = "EEE, dd MMM yyyyy HH:mm:ss z";
   private static final String MONGODB_CONFIG
             = "{"
             + "    \"address\": \"hello_persistor\","
@@ -60,9 +87,11 @@ public class WebServer extends AbstractVerticle {
   private final Random random = ThreadLocalRandom.current();
   private String dateString;
   private MongoService mongoService;
+  private Template ftlTemplate;
 
   @Override
   public void start() {
+    try { ftlTemplate = new Template(TEXT_FORTUNE, new StringReader(TEMPLATE_FORTUNE), new Configuration(Configuration.VERSION_2_3_22)); } catch (Exception ex) { ex.printStackTrace(); }
     mongoService = MongoService.create(vertx, new JsonObject(MONGODB_CONFIG));
     mongoService.start();
     vertx.createHttpServer().requestHandler(req -> {
@@ -81,6 +110,9 @@ public class WebServer extends AbstractVerticle {
         break;
       case PATH_UPDATES:
         handleDBMongo(req,true);
+        break;
+      case PATH_FORTUNES:
+        handleFortunes(req);
         break;
       default:
         req.response().setStatusCode(404);
@@ -128,6 +160,32 @@ public class WebServer extends AbstractVerticle {
     Object id = json.remove(UNDERSCORE_ID);
     json.put(TEXT_ID, Integer.valueOf(((Double)id).intValue()));
     return json;
+  }
+
+  private void handleFortunes(HttpServerRequest req) {
+    final HttpServerResponse resp = req.response();
+    JsonObject query = new JsonObject();
+    mongoService.find(TEXT_FORTUNE, query, res -> {
+      if (res.succeeded() && res.result().size() > 0) {
+        List<Fortune> fortunes = new ArrayList<>();
+          for (JsonObject fortune: res.result()) {
+            fortunes.add(new Fortune(
+              fortune.getInteger(TEXT_ID),
+              fortune.getString(TEXT_MESSAGE)));
+        }            
+        fortunes.add(new Fortune(0, ADD_FORTUNE_MESSAGE));
+        Collections.sort(fortunes);
+
+        Map model = new HashMap();
+        model.put(TEXT_MESSAGES, fortunes);
+        Writer writer = new StringWriter();
+        try { ftlTemplate.process(model, writer); } catch (Exception ex) { ex.printStackTrace(); }
+
+        Buffer buff = Buffer.buffer(writer.toString());
+        setHeaders(resp, RESPONSE_TYPE_HTML, String.valueOf(buff.length()));
+        resp.end(buff);
+      }  
+    });
   }
 
   private void handleDBMongo(final HttpServerRequest req, final boolean randomUpdates) {
@@ -184,5 +242,25 @@ public class WebServer extends AbstractVerticle {
     resp.putHeader(HEADER_SERVER, HEADER_SERVER_VERTX );
     resp.putHeader(HEADER_DATE, dateString);
   }
+
+  public final class Fortune implements Comparable<Fortune> {
+    public int id;
+    public String message;
+
+    public int getId() {
+      return id;
+    }
+    public String getMessage() {
+      return message;
+    }
+    public Fortune(int id, String message) {
+      this.id = id;
+      this.message = message;
+    }
+    @Override
+    public int compareTo(Fortune other) {
+      return message.compareTo(other.message);
+    }
+  }  
 }
 
